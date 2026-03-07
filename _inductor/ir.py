@@ -82,6 +82,7 @@ from .ops_handler import OpCounterCSE, OpCountResult, ReductionType, StoreMode
 from .runtime.benchmarking import benchmarker
 from .runtime.hints import DeviceProperties, ReductionHint
 from .utils import (
+    is_triton_backend,
     argsort,
     argsort_sym,
     cache_on_self,
@@ -402,7 +403,7 @@ def is_triton(x: Union[IRNode, torch.device, None, str]) -> bool:
     # to determine if the scheduler is a triton scheduler subclass
     # requires instantiating a scheduler for them
     if device in ["cpu", "cuda"]:
-        if getattr(config, f"{device}_backend") == "triton":
+        if is_triton_backend(getattr(config, f"{device}_backend")):
             return True
         return False
     if (

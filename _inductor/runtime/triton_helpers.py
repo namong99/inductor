@@ -1,10 +1,12 @@
 # mypy: allow-untyped-decorators
 # mypy: allow-untyped-defs
+import contextlib
 import math as pymath
 import warnings
 from functools import wraps
 from typing import Any, Callable, TypeVar
 
+from .. import config
 from .triton_compat import (  # noqa: F401
     _log2,
     builtins_use_semantic_kwarg,
@@ -19,9 +21,44 @@ _T = TypeVar("_T")
 _LOG_2_E: tl.constexpr = tl.constexpr(pymath.log2(pymath.e))
 
 
+def _cpu_backend_name() -> str:
+    return "triton_shared" if config.cpu_backend == "triton_shared" else "cpu"
+
+@contextlib.contextmanager
+def maybe_limit_cpu_backends():
+    backend_name = _cpu_backend_name()
+    if backend_name != "triton_shared":
+        yield
+        return
+
+    selected = triton.backends.backends.get(backend_name)
+    if selected is None:
+        raise RuntimeError(
+            "Triton backend 'triton_shared' is not registered in triton.backends"
+        )
+
+    cpu_target = triton.backends.compiler.GPUTarget("cpu", 0, 0)
+    backends = triton.backends.backends
+    original = dict(backends)
+    filtered = {
+        name: backend
+        for name, backend in original.items()
+        if name == backend_name or not backend.compiler.supports_target(cpu_target)
+    }
+
+    backends.clear()
+    backends.update(filtered)
+    try:
+        yield
+    finally:
+        backends.clear()
+        backends.update(original)
+
+
 def set_driver_to_cpu():
     driver = triton.runtime.driver
-    if backend := triton.backends.backends.get("cpu", None):
+    backend_name = _cpu_backend_name()
+    if backend := triton.backends.backends.get(backend_name, None):
         if isinstance(driver.active, backend.driver):
             # Don't re-initialize backend if it is already active
             return
@@ -29,7 +66,7 @@ def set_driver_to_cpu():
         return
     # This can be a hard error once triton-cpu is merged into fbcode
     warnings.warn(
-        "Could not find an active CPU backend. Generated kernels will not be executable!"
+        f"Could not find CPU backend '{backend_name}'. Generated kernels will not be executable!"
     )
 
 
@@ -54,9 +91,10 @@ def set_driver_to_gpu():
 def get_backend_options():
     from triton.runtime import driver
 
-    target = driver.active.get_current_target()
-    backend = triton.compiler.compiler.make_backend(target)
-    options = backend.parse_options(dict())
+    with maybe_limit_cpu_backends():
+        target = driver.active.get_current_target()
+        backend = triton.compiler.compiler.make_backend(target)
+        options = backend.parse_options(dict())
     return options.__dict__
 
 

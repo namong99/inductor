@@ -47,6 +47,7 @@ from ..utils import (
     boolean_ops,
     DeferredLineBase,
     generate_assert,
+    is_triton_backend,
     get_current_backend,
     IndentedBuffer,
     ir_dataclass,
@@ -481,6 +482,7 @@ def init_backend_registration() -> None:
             "cpp": CppScheduling,
             "halide": HalideScheduling,
             "triton": TritonScheduling,
+            "triton_shared": TritonScheduling,
         }
         register_backend_for_device(
             "cpu",
@@ -638,7 +640,7 @@ def check_dtype(
     buffer: IndentedBuffer, var: CSEVariableType, dtype: torch.dtype
 ) -> None:
     backend = get_current_backend()
-    if config.test_configs.runtime_triton_dtype_assert and backend == "triton":
+    if config.test_configs.runtime_triton_dtype_assert and is_triton_backend(backend):
         buffer.writeline(f"tl.static_assert({var}.dtype == {triton_type(dtype)})")
     elif config.test_configs.static_cpp_dtype_assert and backend == "cpp":
         from .cpp_utils import CppCSEVariable, DTYPE_TO_CPP
@@ -2392,17 +2394,17 @@ class CSEProxy(DefaultHandler):
         backend = get_current_backend()
 
         output_dtype = None
-        if name == "masked" and backend == "triton":
+        if name == "masked" and is_triton_backend(backend):
             output_dtype = value.dtype
         elif name == "masked" and backend == "cpp":
             output_dtype = V.interpreter.current_node.meta.get(
                 OptimizationContext.key, None
             ).dtype
-        elif backend in ("triton", "cpp", "mps"):
+        elif is_triton_backend(backend) or backend in ("cpp", "mps"):
             dtype_op = getattr(dtype_handler, name)
             output_dtype = dtype_op(*args, **kwargs)
 
-        if backend in ("triton", "cpp"):
+        if is_triton_backend(backend) or backend == "cpp":
             # maybe there are some exceptions on mps?
             assert output_dtype is not None
 

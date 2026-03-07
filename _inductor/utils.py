@@ -2951,12 +2951,16 @@ op_requires_libdevice_fp64: OrderedSet[str] = OrderedSet()
 def register_op_requires_libdevice_fp64(name: str) -> None:
     op_requires_libdevice_fp64.add(name)
 
+def is_triton_backend(backend: str) -> bool:
+    return backend in ("triton", "triton_shared")
 
 def get_current_backend() -> str:
     from torch._inductor.virtualized import V
 
     device_str = V.graph.get_current_device_or_throw().type
     if device_str == "cpu":
+        if is_triton_backend(config.cpu_backend):
+            return "triton"
         return config.cpu_backend
     elif device_str == "mps":
         return "mps"
@@ -2969,7 +2973,7 @@ def upcast_compute_type(dtype: torch.dtype) -> torch.dtype:
     if (
         dtype in (torch.float16, torch.bfloat16)
         and config.triton.codegen_upcast_to_fp32
-        and get_current_backend() == "triton"
+        and is_triton_backend(get_current_backend())
     ):
         return torch.float32
     return dtype

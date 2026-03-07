@@ -1605,7 +1605,7 @@ class rocm:
 
 
 # Backend to use for CPU codegen either "cpp" or "triton" (experimental) or "halide" (experimental)
-cpu_backend: Literal["cpp", "triton", "halide"] = "cpp"
+cpu_backend: Literal["cpp", "triton", "halide", "triton_shared"] = "cpp"
 
 # Backend to use for CUDA codegen either "triton" or "halide" (experimental)
 cuda_backend: Literal["triton", "halide"] = "triton"

@@ -710,7 +710,8 @@ class CachingAutotuner(KernelInterface):
         }
 
         try:
-            binary = triton.compile(*compile_args, **compile_kwargs)
+            with triton_helpers.maybe_limit_cpu_backends():
+                binary = triton.compile(*compile_args, **compile_kwargs)
         except Exception:
             log.exception(
                 "Triton compilation failed: %s\n%s\nmetadata: %s",
@@ -1551,6 +1552,8 @@ class TritonCompileResult(CompileResult[CompiledKernel]):
         compile_meta = self.compile_meta
         binary = self.kernel
         fn = binary.src.fn
+        if self.compile_meta["device_type"] == "cpu":
+            triton_helpers.set_driver_to_cpu()
         binary._init_handles()
         (call_args, def_args, none_args) = self._get_arg_lists(
             fn.arg_names, fn.constexprs
