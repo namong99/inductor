@@ -1088,6 +1088,18 @@ class OverridesData:
     halide: Optional[Callable[..., str]] = None
     mps: Optional[Callable[..., str]] = None
 
+def use_triton_math_compat() -> bool:
+    """
+    Route Triton math intrinsics through Inductor runtime helpers when the
+    active Triton backend does not support libdevice-style globals directly.
+    """
+    return config.cpu_backend == "triton_shared"
+
+
+def triton_libdevice_function(name: str, *args: str) -> str:
+    callee = "triton_math" if use_triton_math_compat() else "libdevice"
+    return f"{callee}.{name}({', '.join(args)})"
+
 
 # NB: if you add a new special function, don't forget to update
 # torch._inductor.ops_handler too
@@ -1100,25 +1112,25 @@ pointwise_overrides_data: dict[str, OverridesData] = dict(
     bessel_j0=OverridesData(
         type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.INT_TO_FLOAT,
         cpp=lambda x: f"bessel_j0_forward({x})",
-        triton=lambda x: f"libdevice.j0({x})",
+        triton=lambda x: triton_libdevice_function("j0", x),
         name="special_bessel_j0",
     ),
     bessel_j1=OverridesData(
         type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.INT_TO_FLOAT,
         cpp=lambda x: f"bessel_j1_forward({x})",
-        triton=lambda x: f"libdevice.j1({x})",
+        triton=lambda x: triton_libdevice_function("j1", x),
         name="special_bessel_j1",
     ),
     bessel_y0=OverridesData(
         type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.INT_TO_FLOAT,
         cpp=lambda x: f"bessel_y0_forward({x})",
-        triton=lambda x: f"libdevice.y0({x})",
+        triton=lambda x: triton_libdevice_function("y0", x),
         name="special_bessel_y0",
     ),
     bessel_y1=OverridesData(
         type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.INT_TO_FLOAT,
         cpp=lambda x: f"bessel_y1_forward({x})",
-        triton=lambda x: f"libdevice.y1({x})",
+        triton=lambda x: triton_libdevice_function("y1", x),
         name="special_bessel_y1",
     ),
     digamma=OverridesData(
@@ -1132,14 +1144,14 @@ pointwise_overrides_data: dict[str, OverridesData] = dict(
     erfcx=OverridesData(
         type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.INT_TO_FLOAT,
         cpp=lambda x: f"calc_erfcx({x})",
-        triton=lambda x: f"libdevice.erfcx({x})",
+        triton=lambda x: triton_libdevice_function("erfcx", x),
         name="special_erfcx",
     ),
     fma=OverridesData(
         type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.INT_TO_FLOAT,
         cpp=lambda x, y, z: f"std::fma({x}, {y}, {z})",
         cppvec=lambda x, y, z: f"fmadd({x}, {y}, {z})",
-        triton=lambda x, y, z: f"libdevice.fma({x}, {y}, {z})",
+        triton=lambda x, y, z: triton_libdevice_function("fma", x, y, z),
         name="fma",
     ),
     # erfinv, exp2, expit, gammaln
@@ -1166,7 +1178,7 @@ pointwise_overrides_data: dict[str, OverridesData] = dict(
     i0=OverridesData(
         type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.INT_TO_FLOAT,
         cpp=lambda x: f"calc_i0({x})",
-        triton=lambda x: f"libdevice.cyl_bessel_i0({x})",
+        triton=lambda x: triton_libdevice_function("cyl_bessel_i0", x),
         cppvec=lambda x: f"{x}.i0()",
         name="i0",
     ),
@@ -1179,7 +1191,7 @@ pointwise_overrides_data: dict[str, OverridesData] = dict(
     i1=OverridesData(
         type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.INT_TO_FLOAT,
         cpp=lambda x: f"calc_i1({x})",
-        triton=lambda x: f"libdevice.cyl_bessel_i1({x})",
+        triton=lambda x: triton_libdevice_function("cyl_bessel_i1", x),
         name="special_i1",
     ),
     i1e=OverridesData(
@@ -1196,13 +1208,13 @@ pointwise_overrides_data: dict[str, OverridesData] = dict(
     modified_bessel_i0=OverridesData(
         type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.INT_TO_FLOAT,
         cpp=lambda x: f"modified_bessel_i0_forward({x})",
-        triton=lambda x: f"libdevice.cyl_bessel_i0({x})",
+        triton=lambda x: triton_libdevice_function("cyl_bessel_i0", x),
         name="special_modified_bessel_i0",
     ),
     modified_bessel_i1=OverridesData(
         type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.INT_TO_FLOAT,
         cpp=lambda x: f"modified_bessel_i1_forward({x})",
-        triton=lambda x: f"libdevice.cyl_bessel_i1({x})",
+        triton=lambda x: triton_libdevice_function("cyl_bessel_i1", x),
         name="special_modified_bessel_i1",
     ),
     modified_bessel_k0=OverridesData(

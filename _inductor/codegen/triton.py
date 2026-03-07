@@ -79,6 +79,7 @@ from .common import (
     TensorArg,
     WorkspaceArg,
     WorkspaceZeroMode,
+    triton_libdevice_function,
 )
 from .simd import (
     constant_repr,
@@ -165,7 +166,7 @@ def gen_common_triton_imports() -> str:
 
     imports.splice(
         """
-        from torch._inductor.runtime import triton_helpers, triton_heuristics
+        from torch._inductor.runtime import triton_helpers, triton_heuristics, triton_math
         from torch._inductor.runtime.triton_helpers import libdevice, math as tl_math
         from torch._inductor.runtime.hints import AutotuneHint, ReductionHint, TileHint, DeviceProperties
         """
@@ -565,7 +566,7 @@ class TritonPrinter(PythonPrinter):
     def _print_TruncToInt(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
         return (
-            f"libdevice.trunc({self._print(expr.args[0])}).to({V.kernel.index_dtype})"
+            f"{triton_libdevice_function("trunc", self._print(expr.args[0]))}.to({V.kernel.index_dtype})"
         )
 
     def _print_Float(self, expr: sympy.Expr) -> str:
@@ -607,36 +608,36 @@ class TritonPrinter(PythonPrinter):
     def _print_floor(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
         return (
-            f"libdevice.floor({self._print(expr.args[0])}).to({V.kernel.index_dtype})"
+            f"{triton_libdevice_function("floor", self._print(expr.args[0]))}.to({V.kernel.index_dtype})"
         )
 
     def _print_FloorToInt(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
         return (
-            f"libdevice.floor({self._print(expr.args[0])}).to({V.kernel.index_dtype})"
+            f"{triton_libdevice_function("floor", self._print(expr.args[0]))}.to({V.kernel.index_dtype})"
         )
 
     def _print_ceiling(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
-        return f"libdevice.ceil({self._print(expr.args[0])}).to({V.kernel.index_dtype})"
+        return f"{triton_libdevice_function("ceil", self._print(expr.args[0]))}.to({V.kernel.index_dtype})"
 
     def _print_CeilToInt(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
-        return f"libdevice.ceil({self._print(expr.args[0])}).to({V.kernel.index_dtype})"
+        return f"{triton_libdevice_function("ceil", self._print(expr.args[0]))}.to({V.kernel.index_dtype})"
 
     def _helper_sqrt(self, expr: sympy.Expr) -> str:
-        return f"libdevice.sqrt(({self._print(expr)}).to(tl.float32))"
+        return triton_libdevice_function("sqrt", f"({self._print(expr)}).to(tl.float32)")
 
     def _print_FloatPow(self, expr: sympy.Expr) -> str:
         return (
-            f"libdevice.pow({self._print(expr.args[0])}, {self._print(expr.args[1])})"
+            triton_libdevice_function("pow", self._print(expr.args[0]), self._print(expr.args[1]))
         )
 
     def _print_PowByNatural(self, expr: sympy.Expr) -> str:
         if expr.args[0].is_Integer:
-            return f"libdevice.pow({float(expr.args[0])}, {self._print(expr.args[1])})"
+            return triton_libdevice_function("pow", str(float(expr.args[0])), self._print(expr.args[1]))
         return (
-            f"libdevice.pow({self._print(expr.args[0])}, {self._print(expr.args[1])})"
+            triton_libdevice_function("pow", self._print(expr.args[0]), self._print(expr.args[1]))
         )
 
     def _print_Where(self, expr: sympy.Expr) -> str:
@@ -676,48 +677,48 @@ class TritonPrinter(PythonPrinter):
 
     def _print_OpaqueUnaryFn_cos(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
-        return f"libdevice.cos(({self._print(expr.args[0])}).to(tl.float32))"
+        return triton_libdevice_function("cos", f"({self._print(expr.args[0])}).to(tl.float32)")
 
     def _print_OpaqueUnaryFn_cosh(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
-        return f"libdevice.cosh(({self._print(expr.args[0])}).to(tl.float32))"
+        return triton_libdevice_function("cosh", f"({self._print(expr.args[0])}).to(tl.float32)")
 
     def _print_OpaqueUnaryFn_acos(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
-        return f"libdevice.acos(({self._print(expr.args[0])}).to(tl.float32))"
+        return triton_libdevice_function("acos", f"({self._print(expr.args[0])}).to(tl.float32)")
 
     def _print_OpaqueUnaryFn_sin(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
-        return f"libdevice.sin(({self._print(expr.args[0])}).to(tl.float32))"
+        return triton_libdevice_function("sin", f"({self._print(expr.args[0])}).to(tl.float32)")
 
     def _print_OpaqueUnaryFn_sinh(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
-        return f"libdevice.sinh(({self._print(expr.args[0])}).to(tl.float32))"
+        return triton_libdevice_function("sinh", f"({self._print(expr.args[0])}).to(tl.float32)")
 
     def _print_OpaqueUnaryFn_asin(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
-        return f"libdevice.asin(({self._print(expr.args[0])}).to(tl.float32))"
+        return triton_libdevice_function("asin", f"({self._print(expr.args[0])}).to(tl.float32)")
 
     def _print_OpaqueUnaryFn_tan(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
-        return f"libdevice.tan(({self._print(expr.args[0])}).to(tl.float32))"
+        return triton_libdevice_function("tan", f"({self._print(expr.args[0])}).to(tl.float32)")
 
     def _print_OpaqueUnaryFn_tanh(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
-        return f"libdevice.tanh(({self._print(expr.args[0])}).to(tl.float32))"
+        return triton_libdevice_function("tanh", f"({self._print(expr.args[0])}).to(tl.float32)")
 
     def _print_OpaqueUnaryFn_atan(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
-        return f"libdevice.atan(({self._print(expr.args[0])}).to(tl.float32))"
+        return triton_libdevice_function("atan", f"({self._print(expr.args[0])}).to(tl.float32)")
 
     def _print_OpaqueUnaryFn_log2(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
-        return f"libdevice.log2(({self._print(expr.args[0])}).to(tl.float32))"
+        return triton_libdevice_function("log2", f"({self._print(expr.args[0])}).to(tl.float32)")
 
     def _print_RoundToInt(self, expr: sympy.Expr) -> str:
         assert len(expr.args) == 1
         return (
-            f"libdevice.llrint({self._print(expr.args[0])}).to({V.kernel.index_dtype})"
+            f"{triton_libdevice_function("llrint", self._print(expr.args[0]))}.to({V.kernel.index_dtype})"
         )
 
     def _print_RoundDecimal(self, expr: sympy.Expr) -> str:
@@ -731,7 +732,7 @@ class TritonPrinter(PythonPrinter):
             )
 
         number_str = self.parenthesize(number, PRECEDENCE["Mul"])
-        return f"libdevice.nearbyint(1e{ndigits} * {number_str}) * 1e{-ndigits}"
+        return f"{triton_libdevice_function("nearbyint", f"1e{ndigits} * {number_str}")} * 1e{-ndigits}"
 
 
 texpr = TritonPrinter().doprint
@@ -988,24 +989,24 @@ class TritonOverrides(OpOverrides):
         more details.
         """
         if config.use_fast_math:
-            return f"libdevice.exp2({x} * {TritonOverrides._LOG_2_E})"
+            return triton_libdevice_function("exp2", f"{x} * {TritonOverrides._LOG_2_E}")
         else:
             return f"tl_math.exp({x})"
 
     @staticmethod
     @maybe_upcast_float32()
     def exp2(x):
-        return f"libdevice.exp2({x})"
+        return triton_libdevice_function("exp2", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def expm1(x):
-        return f"libdevice.expm1({x})"
+        return triton_libdevice_function("expm1", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def sqrt(x):
-        return f"libdevice.sqrt({x})"
+        return triton_libdevice_function("sqrt", x)
 
     @staticmethod
     def relu(x):
@@ -1068,92 +1069,92 @@ class TritonOverrides(OpOverrides):
     @staticmethod
     @maybe_upcast_float32()
     def lgamma(x):
-        return f"libdevice.lgamma({x})"
+        return triton_libdevice_function("lgamma", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def erf(x):
-        return f"libdevice.erf({x})"
+        return triton_libdevice_function("erf", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def cosh(x):
-        return f"libdevice.cosh({x})"
+        return triton_libdevice_function("cosh", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def sinh(x):
-        return f"libdevice.sinh({x})"
+        return triton_libdevice_function("sinh", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def acos(x):
-        return f"libdevice.acos({x})"
+        return triton_libdevice_function("acos", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def acosh(x):
-        return f"libdevice.acosh({x})"
+        return triton_libdevice_function("acosh", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def asin(x):
-        return f"libdevice.asin({x})"
+        return triton_libdevice_function("asin", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def asinh(x):
-        return f"libdevice.asinh({x})"
+        return triton_libdevice_function("asinh", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def atan2(x, y):
-        return f"libdevice.atan2({x}, {y})"
+        return triton_libdevice_function("atan2", x, y)
 
     @staticmethod
     @maybe_upcast_float32()
     def atan(x):
-        return f"libdevice.atan({x})"
+        return triton_libdevice_function("atan", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def atanh(x):
-        return f"libdevice.atanh({x})"
+        return triton_libdevice_function("atanh", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def copysign(x, y):
-        return f"libdevice.copysign({x}, {y})"
+        return triton_libdevice_function("copysign", x, y)
 
     @staticmethod
     @maybe_upcast_float32()
     def erfc(x):
-        return f"libdevice.erfc({x})"
+        return triton_libdevice_function("erfc", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def erfinv(x):
-        return f"libdevice.erfinv({x})"
+        return triton_libdevice_function("erfinv", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def hypot(x, y):
-        return f"libdevice.hypot({x}, {y})"
+        return triton_libdevice_function("hypot", x, y)
 
     @staticmethod
     @maybe_upcast_float32()
     def log10(x):
-        return f"libdevice.log10({x})"
+        return triton_libdevice_function("log10", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def log2(x):
-        return f"libdevice.log2({x})"
+        return triton_libdevice_function("log2", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def nextafter(x, y):
-        return f"libdevice.nextafter({x}, {y})"
+        return triton_libdevice_function("nextafter", x, y)
 
     @staticmethod
     def logical_and(a, b):
@@ -1217,22 +1218,22 @@ class TritonOverrides(OpOverrides):
     @staticmethod
     @maybe_upcast_float32()
     def rsqrt(x):
-        return f"libdevice.rsqrt({x})"
+        return triton_libdevice_function("rsqrt", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def log1p(x):
-        return f"libdevice.log1p({x})"
+        return triton_libdevice_function("log1p", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def tan(x):
-        return f"libdevice.tan({x})"
+        return triton_libdevice_function("tan", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def tanh(x):
-        return f"libdevice.tanh({x})"
+        return triton_libdevice_function("tanh", x)
 
     @staticmethod
     @maybe_upcast_float32()
@@ -1243,18 +1244,18 @@ class TritonOverrides(OpOverrides):
     def signbit(x):
         # XX: This is wrong for the value -0.0 in floating point
         return (
-            f"(libdevice.signbit({x}) != 0) if ({x}).dtype is tl.float32 else {x} < 0"
+            f"({triton_libdevice_function("signbit", x)} != 0) if ({x}).dtype is tl.float32 else {x} < 0"
         )
 
     @staticmethod
     @maybe_upcast_float32()
     def fmod(a, b):
-        return f"libdevice.fmod({a}, {b})"
+        return triton_libdevice_function("fmod", a, b)
 
     @staticmethod
     @maybe_upcast_float32()
     def pow(a, b):
-        return f"libdevice.pow({a}, {b})"
+        return triton_libdevice_function("pow", a, b)
 
     @staticmethod
     @maybe_upcast_float32()
@@ -1264,22 +1265,22 @@ class TritonOverrides(OpOverrides):
     @staticmethod
     @maybe_upcast_float32(convert_output=False)
     def isinf(x):
-        return f"libdevice.isinf({x}).to(tl.int1)"
+        return f"{triton_libdevice_function("isinf", x)}.to(tl.int1)"
 
     @staticmethod
     @maybe_upcast_float32(convert_output=False)
     def isnan(x):
-        return f"libdevice.isnan({x}).to(tl.int1)"
+        return f"{triton_libdevice_function("isnan", x)}.to(tl.int1)"
 
     @staticmethod
     @maybe_upcast_float32()
     def round(x):
-        return f"libdevice.nearbyint({x})"
+        return triton_libdevice_function("nearbyint", x)
 
     @staticmethod
     @maybe_upcast_float32()
     def floor(x):
-        return f"libdevice.floor({x})"
+        return triton_libdevice_function("floor", x)
 
     @staticmethod
     def floordiv(a, b):
@@ -1301,7 +1302,7 @@ class TritonOverrides(OpOverrides):
     @staticmethod
     @maybe_upcast_float32()
     def trunc(x):
-        return f"libdevice.trunc({x})"
+        return triton_libdevice_function("trunc", x)
 
     @staticmethod
     def truncdiv(a, b):
@@ -1312,7 +1313,7 @@ class TritonOverrides(OpOverrides):
     @staticmethod
     @maybe_upcast_float32()
     def ceil(x):
-        return f"libdevice.ceil({x})"
+        return triton_libdevice_function("ceil", x)
 
 
 TritonOverrides._initialize_pointwise_overrides("triton")
@@ -1331,12 +1332,12 @@ class TritonKernelOverrides(TritonOverrides):
 
         # happens in __init__ unlike _initialize_pointwise_overrides
         # because the libdevice registrations are populated during lowerings
-        self._setup_libdevice_routing()
+        self._setup_triton_math_routing()
 
     @classmethod
     @functools.cache
-    def _setup_libdevice_routing(cls):
-        """Set up routing to libdevice implementations for fp64 inputs."""
+    def _setup_triton_math_routing(cls):
+        """Route fp64 intrinsic calls through the centralized Triton math surface."""
 
         from torch._inductor.codegen.common import OpDecompositions
 
@@ -1361,7 +1362,7 @@ class TritonKernelOverrides(TritonOverrides):
 
             def dtype_router(x, _original_impl, _fn_name):
                 if x.dtype == torch.float64:
-                    return f"libdevice.{_fn_name}({x})"
+                    return triton_libdevice_function(_fn_name, x)
                 else:
                     return _original_impl(x)
 

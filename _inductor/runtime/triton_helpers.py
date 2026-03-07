@@ -15,6 +15,7 @@ from .triton_compat import (  # noqa: F401
     tl,
     triton,
 )
+from . import triton_math
 
 
 _T = TypeVar("_T")
@@ -207,7 +208,7 @@ def max_with_index(value, index, dim):
 @triton.jit
 def exp(x, use_fast_math: tl.constexpr):
     if use_fast_math:
-        return libdevice.exp2(x * _LOG_2_E)
+        return triton_math.exp2(x * _LOG_2_E)
     else:
         return math.exp(x)
 
@@ -547,9 +548,9 @@ def exclusive_scan_decoupled_lookback_64(scratch_base, block_value, index, combi
 @triton.jit
 def frexp(x):
     # TODO(isuruf): use inline_asm_elementwise here
-    y = libdevice.ilogb(x) + 1
+    y = triton_math.ilogb(x) + 1
     exponent = tl.where(x == 0, 0, y)
-    mantissa = tl.where(x == 0, 0, libdevice.ldexp(x, -y))
+    mantissa = tl.where(x == 0, 0, triton_math.ldexp(x, -y))
     return mantissa, exponent
 
 
