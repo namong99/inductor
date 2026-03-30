@@ -1604,6 +1604,23 @@ class rocm:
     split_k_threshold: int = 16
 
 
+# Hybrid MM eager-bridge controls. These are used by the explicit
+# hybrid_mm_eager_bridge backend and do not rewrite the default Inductor path.
+hybrid_mm_axis: Literal["n"] = os.environ.get("TORCHINDUCTOR_HYBRID_MM_AXIS", "n")
+hybrid_mm_cpu_ratio: float = float(os.environ.get("TORCHINDUCTOR_HYBRID_MM_CPU_RATIO", "0.5"))
+hybrid_mm_cpu_n_align: int = int(os.environ.get("TORCHINDUCTOR_HYBRID_MM_CPU_N_ALIGN", "32"))
+hybrid_mm_min_chunk_n: int = int(os.environ.get("TORCHINDUCTOR_HYBRID_MM_MIN_CHUNK_N", "32"))
+hybrid_mm_min_m: int = int(os.environ.get("TORCHINDUCTOR_HYBRID_MM_MIN_M", "1"))
+hybrid_mm_min_n: int = int(os.environ.get("TORCHINDUCTOR_HYBRID_MM_MIN_N", "64"))
+hybrid_mm_min_k: int = int(os.environ.get("TORCHINDUCTOR_HYBRID_MM_MIN_K", "64"))
+
+# When enabled for CPU matmul lowering with cpu_backend="triton_shared", do not
+# construct ATen/CPP GEMM fallbacks. Either generate at least one Triton choice or
+# fail loudly.
+force_triton_shared_mm: bool = (
+    os.environ.get("TORCHINDUCTOR_FORCE_TRITON_SHARED_MM", "0") == "1"
+)
+
 # Backend to use for CPU codegen either "cpp" or "triton" (experimental) or "halide" (experimental)
 cpu_backend: Literal["cpp", "triton", "halide", "triton_shared"] = "cpp"
 

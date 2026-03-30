@@ -1,0 +1,276 @@
+{
+  "backend_diagnostics": {
+    "torch_version": "2.8.0+cu128",
+    "cuda_available": true,
+    "cuda_device_count": 2,
+    "cuda_device_name": "NVIDIA GeForce RTX 3090",
+    "TRITON_SHARED_ENABLE_AMX": "0",
+    "TRITON_SHARED_OPT_PATH": "/home/hosu99/home/triton/build/cmake.linux-x86_64-cpython-3.12/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt",
+    "float32_matmul_precision": "highest",
+    "allow_tf32": false
+  },
+  "requested": {
+    "dtype": "float32",
+    "warmup": 10,
+    "repeat": 30,
+    "modes": [
+      "eager",
+      "inductor",
+      "hybrid"
+    ],
+    "shapes": [
+      [
+        1024,
+        4096,
+        4096
+      ],
+      [
+        2048,
+        4096,
+        4096
+      ],
+      [
+        1024,
+        11008,
+        4096
+      ]
+    ],
+    "tag": ""
+  },
+  "results": [
+    {
+      "shape": [
+        1024,
+        4096,
+        4096
+      ],
+      "dtype": "float32",
+      "mode": "eager",
+      "status": "PASS",
+      "output_device": "cuda:0",
+      "max_abs": 0.0,
+      "max_rel": 0.0,
+      "first_run_ms": 1.7378830234520137,
+      "median_ms": 1.442785025574267,
+      "mean_ms": 1.4418413028276216,
+      "min_ms": 1.4023599796928465,
+      "max_ms": 1.4828200219199061,
+      "stdev_ms": 0.03732725110208233,
+      "p90_ms": 1.4792100409977138,
+      "p95_ms": 1.4809509739279747,
+      "tflops": 23.814870378436254,
+      "speedup_vs_eager": 1.0,
+      "speedup_vs_inductor": 1.0559341567212754,
+      "note": null,
+      "debug": null
+    },
+    {
+      "shape": [
+        1024,
+        4096,
+        4096
+      ],
+      "dtype": "float32",
+      "mode": "inductor",
+      "status": "PASS",
+      "output_device": "cuda:0",
+      "max_abs": 0.0,
+      "max_rel": 0.0,
+      "first_run_ms": 1816.9140759855509,
+      "median_ms": 1.5234859893098474,
+      "mean_ms": 1.506279738775144,
+      "min_ms": 1.4486399595625699,
+      "max_ms": 1.5411909553222358,
+      "stdev_ms": 0.03318044371648324,
+      "p90_ms": 1.5268110437318683,
+      "p95_ms": 1.5402110293507576,
+      "tflops": 22.553366823914978,
+      "speedup_vs_eager": 0.9470287457174853,
+      "speedup_vs_inductor": 1.0,
+      "note": null,
+      "debug": null
+    },
+    {
+      "shape": [
+        1024,
+        4096,
+        4096
+      ],
+      "dtype": "float32",
+      "mode": "hybrid",
+      "status": "PASS",
+      "output_device": "cuda:0",
+      "max_abs": 0.0,
+      "max_rel": 0.0,
+      "first_run_ms": 463.8338109944016,
+      "median_ms": 1.4530149928759784,
+      "mean_ms": 1.4750321958369266,
+      "min_ms": 1.4477299991995096,
+      "max_ms": 1.5131010441109538,
+      "stdev_ms": 0.029510148819355507,
+      "p90_ms": 1.5106300124898553,
+      "p95_ms": 1.5123509801924229,
+      "tflops": 23.647201533682157,
+      "speedup_vs_eager": 0.9929594895084578,
+      "speedup_vs_inductor": 1.0484998412125015,
+      "note": null,
+      "debug": null
+    },
+    {
+      "shape": [
+        2048,
+        4096,
+        4096
+      ],
+      "dtype": "float32",
+      "mode": "eager",
+      "status": "PASS",
+      "output_device": "cuda:0",
+      "max_abs": 0.0,
+      "max_rel": 0.0,
+      "first_run_ms": 2.9649509815499187,
+      "median_ms": 2.947431494249031,
+      "mean_ms": 2.9522253995916494,
+      "min_ms": 2.91559100151062,
+      "max_ms": 2.9797509778290987,
+      "stdev_ms": 0.01600739159021239,
+      "p90_ms": 2.9750909889116883,
+      "p95_ms": 2.978350967168808,
+      "tflops": 23.315037811763926,
+      "speedup_vs_eager": 1.0,
+      "speedup_vs_inductor": 1.02846376340776,
+      "note": null,
+      "debug": null
+    },
+    {
+      "shape": [
+        2048,
+        4096,
+        4096
+      ],
+      "dtype": "float32",
+      "mode": "inductor",
+      "status": "PASS",
+      "output_device": "cuda:0",
+      "max_abs": 0.0,
+      "max_rel": 0.0,
+      "first_run_ms": 99.49428000254557,
+      "median_ms": 3.031326486961916,
+      "mean_ms": 3.0236562655773014,
+      "min_ms": 2.684218983631581,
+      "max_ms": 3.089751990046352,
+      "stdev_ms": 0.08732869251792752,
+      "p90_ms": 3.0790510354563594,
+      "p95_ms": 3.0819519888609648,
+      "tflops": 22.66977081867307,
+      "speedup_vs_eager": 0.9723239997163858,
+      "speedup_vs_inductor": 1.0,
+      "note": null,
+      "debug": null
+    },
+    {
+      "shape": [
+        2048,
+        4096,
+        4096
+      ],
+      "dtype": "float32",
+      "mode": "hybrid",
+      "status": "PASS",
+      "output_device": "cuda:0",
+      "max_abs": 0.0,
+      "max_rel": 0.0,
+      "first_run_ms": 95.59060295578092,
+      "median_ms": 3.035347006516531,
+      "mean_ms": 3.0149565640992173,
+      "min_ms": 2.682109014131129,
+      "max_ms": 3.086591954343021,
+      "stdev_ms": 0.1045786925663243,
+      "p90_ms": 3.0796219944022596,
+      "p95_ms": 3.0828419839963317,
+      "tflops": 22.63974319524832,
+      "speedup_vs_eager": 0.9710360917289668,
+      "speedup_vs_inductor": 0.9986754333043361,
+      "note": null,
+      "debug": null
+    },
+    {
+      "shape": [
+        1024,
+        11008,
+        4096
+      ],
+      "dtype": "float32",
+      "mode": "eager",
+      "status": "PASS",
+      "output_device": "cuda:0",
+      "max_abs": 0.0,
+      "max_rel": 0.0,
+      "first_run_ms": 4.018628969788551,
+      "median_ms": 3.94549299380742,
+      "mean_ms": 3.943532833363861,
+      "min_ms": 3.925018012523651,
+      "max_ms": 3.954858984798193,
+      "stdev_ms": 0.006840834232140962,
+      "p90_ms": 3.9504090091213584,
+      "p95_ms": 3.9520980208180845,
+      "tflops": 23.404374816767753,
+      "speedup_vs_eager": 1.0,
+      "speedup_vs_inductor": 1.015163000881924,
+      "note": null,
+      "debug": null
+    },
+    {
+      "shape": [
+        1024,
+        11008,
+        4096
+      ],
+      "dtype": "float32",
+      "mode": "inductor",
+      "status": "PASS",
+      "output_device": "cuda:0",
+      "max_abs": 0.0,
+      "max_rel": 0.0,
+      "first_run_ms": 63.88730701291934,
+      "median_ms": 4.005318507552147,
+      "mean_ms": 4.005265567684546,
+      "min_ms": 3.709706012159586,
+      "max_ms": 4.054559045471251,
+      "stdev_ms": 0.0589242635111746,
+      "p90_ms": 4.043288994580507,
+      "p95_ms": 4.043888999149203,
+      "tflops": 23.05479494074861,
+      "speedup_vs_eager": 0.9850634815603493,
+      "speedup_vs_inductor": 1.0,
+      "note": null,
+      "debug": null
+    },
+    {
+      "shape": [
+        1024,
+        11008,
+        4096
+      ],
+      "dtype": "float32",
+      "mode": "hybrid",
+      "status": "PASS",
+      "output_device": "cuda:0",
+      "max_abs": 0.0,
+      "max_rel": 0.0,
+      "first_run_ms": 117.1727660112083,
+      "median_ms": 4.0023930196184665,
+      "mean_ms": 3.999795599762971,
+      "min_ms": 3.8217779947444797,
+      "max_ms": 4.026478971354663,
+      "stdev_ms": 0.034667265784516135,
+      "p90_ms": 4.016769002191722,
+      "p95_ms": 4.021449014544487,
+      "tflops": 23.071646490329577,
+      "speedup_vs_eager": 0.9857834986389041,
+      "speedup_vs_inductor": 1.0007309346981519,
+      "note": null,
+      "debug": null
+    }
+  ]
+}

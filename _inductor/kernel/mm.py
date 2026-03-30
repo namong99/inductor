@@ -38,6 +38,7 @@ from ..select_algorithm import (
     TritonTemplate,
 )
 from ..utils import (
+    _use_autotune_backend,
     _use_cutlass_for_op,
     get_k_splits,
     get_tma_workspace_arg,
@@ -646,6 +647,34 @@ def check_supported_striding(mat_a, mat_b) -> None:
 aten_bias_addmm = ExternKernelChoice(bias_addmm, None)
 
 
+def _force_triton_shared_mm(layout) -> bool:
+    return (
+        layout.device.type == "cpu"
+        and inductor_config.cpu_backend == "triton_shared"
+        and inductor_config.force_triton_shared_mm
+    )
+
+
+def _ensure_triton_shared_preconditions(op_name: str, layout) -> None:
+    if not _force_triton_shared_mm(layout):
+        return
+    if not (inductor_config.max_autotune or inductor_config.max_autotune_gemm):
+        raise RuntimeError(
+            f"{op_name}: force_triton_shared_mm requires max_autotune or max_autotune_gemm"
+        )
+    if not _use_autotune_backend("TRITON"):
+        raise RuntimeError(
+            f"{op_name}: force_triton_shared_mm requires TRITON in max_autotune_gemm_backends"
+        )
+
+
+def _ensure_triton_shared_choices(op_name: str, layout, choices) -> None:
+    if _force_triton_shared_mm(layout) and not choices:
+        raise RuntimeError(
+            f"{op_name}: no Triton choices were generated for cpu_backend='triton_shared'"
+        )
+
+
 def decomposeK(a, b, k_splits):
     m = a.shape[0]
     n = b.shape[1]
@@ -668,6 +697,7 @@ def tuned_mm(mat1, mat2, *, layout=None):
     m, n, k, layout, mat1, mat2 = mm_args(mat1, mat2, layout=layout)
     device_type = ir.get_device_type(mat1)
     name = "mm"
+    _ensure_triton_shared_preconditions(name, layout)
 
     # below is for getting an overview logging info of inductor mms
     counters["aten_mm_info"][f"aten.mm_{m}_{n}_{k}"] += 1
@@ -689,7 +719,9 @@ def tuned_mm(mat1, mat2, *, layout=None):
 
     # options to tune from
     choices = (
-        [aten_mm.bind((mat1, mat2), aten_layout)] if use_aten_gemm_kernels() else []
+        [aten_mm.bind((mat1, mat2), aten_layout)]
+        if use_aten_gemm_kernels() and not _force_triton_shared_mm(layout)
+        else []
     )
     static_shape, is_nonzero = _is_static_problem(layout)
 
@@ -787,7 +819,7 @@ def tuned_mm(mat1, mat2, *, layout=None):
     if is_nonzero and use_ck_tile_gemm_template(layout, m, n, k):
         CKTileGemmTemplate.add_choices(choices, layout, [mat1, mat2])
 
-    if use_cpp_gemm_template(layout, mat1, mat2):
+    if use_cpp_gemm_template(layout, mat1, mat2) and not _force_triton_shared_mm(layout):
         CppGemmTemplate.add_choices(
             choices,
             layout,
@@ -841,9 +873,11 @@ def tuned_mm(mat1, mat2, *, layout=None):
             else:
                 choices = choices[:num_choices_before_extra_configs]
 
-    for k in inductor_config.external_matmul:
-        choices.append(lazy_register_extern_choice(k).bind((mat1, mat2), layout))
+    if not _force_triton_shared_mm(layout):
+        for k in inductor_config.external_matmul:
+            choices.append(lazy_register_extern_choice(k).bind((mat1, mat2), layout))
 
+    _ensure_triton_shared_choices(name, layout, choices)
     return autotune_select_algorithm(name, choices, [mat1, mat2], layout)
 
 
@@ -899,6 +933,7 @@ def tuned_int_mm(mat1, mat2, *, layout=None):
 def tuned_addmm(inp, mat1, mat2, *, alpha=1, beta=1, layout=None):
     device_type = ir.get_device_type(mat1)
     m, n, k, layout, mat1, mat2, inp_expanded = mm_args(mat1, mat2, inp, layout=layout)
+    _ensure_triton_shared_preconditions("addmm", layout)
     static_shape, is_nonzero = _is_static_problem(layout)
 
     # below is for getting an overview logging info of inductor mms
@@ -933,9 +968,10 @@ def tuned_addmm(inp, mat1, mat2, *, alpha=1, beta=1, layout=None):
                     beta=beta,
                 )
             ]
-            if use_aten_gemm_kernels()
+            if use_aten_gemm_kernels() and not _force_triton_shared_mm(layout)
             else []
         )
+        _ensure_triton_shared_choices("addmm", layout, choices)
         return autotune_select_algorithm("addmm", choices, [inp, mat1, mat2], layout)
 
     choices = (
@@ -947,12 +983,13 @@ def tuned_addmm(inp, mat1, mat2, *, alpha=1, beta=1, layout=None):
                 beta=beta,
             )
         ]
-        if use_aten_gemm_kernels()
+        if use_aten_gemm_kernels() and not _force_triton_shared_mm(layout)
         else []
     )
 
     if (
         use_aten_gemm_kernels()
+        and not _force_triton_shared_mm(layout)
         and inp_expanded.get_stride()[0] == 0
         and inp_expanded.get_device().type == "cuda"
         and inductor_config.triton.autotune_cublasLt
@@ -1033,7 +1070,7 @@ def tuned_addmm(inp, mat1, mat2, *, alpha=1, beta=1, layout=None):
             input_reorder=[2, 0, 1],
         )
 
-    if use_cpp_gemm_template(layout, mat1, mat2):
+    if use_cpp_gemm_template(layout, mat1, mat2) and not _force_triton_shared_mm(layout):
         CppGemmTemplate.add_choices(
             choices,
             layout,
@@ -1043,6 +1080,7 @@ def tuned_addmm(inp, mat1, mat2, *, alpha=1, beta=1, layout=None):
             has_bias=True,
         )
 
+    _ensure_triton_shared_choices("addmm", layout, choices)
     return autotune_select_algorithm(
         "addmm", choices, [inp_expanded, mat1, mat2], layout
     )

@@ -1,0 +1,129 @@
+{
+  "backend_diagnostics": {
+    "torch_version": "2.8.0+cu128",
+    "cuda_available": true,
+    "cuda_device_count": 2,
+    "cuda_device_name": "NVIDIA GeForce RTX 3090",
+    "cpu_model": "AMD EPYC 7402 24-Core Processor",
+    "TRITON_SHARED_ENABLE_AMX": "0",
+    "TRITON_SHARED_OPT_PATH": "/home/hosu99/home/triton/build/cmake.linux-x86_64-cpython-3.12/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt",
+    "float32_matmul_precision": "highest",
+    "allow_tf32": false,
+    "triton_import_ok": true,
+    "triton_version": "3.4.0",
+    "registered_triton_backends": [
+      "amd",
+      "nvidia",
+      "triton_shared"
+    ],
+    "has_triton_shared_backend": true
+  },
+  "requested": {
+    "dtype": "float32",
+    "shapes": [
+      [
+        1024,
+        1024,
+        1024
+      ]
+    ],
+    "cpu_ratio": 0.5,
+    "n_align": 32,
+    "min_chunk_n": 32,
+    "warmup": 5,
+    "repeat": 20
+  },
+  "results": [
+    {
+      "shape": [
+        1024,
+        1024,
+        1024
+      ],
+      "dtype": "float32",
+      "cpu_ratio_requested": 0.5,
+      "cpu_n": 512,
+      "gpu_n": 512,
+      "cpu_target_seen": true,
+      "cuda_target_seen": false,
+      "cpu_compile_calls": [
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)",
+        "GPUTarget(backend='cpu', arch='', warp_size=32)"
+      ],
+      "gpu_compile_calls": [],
+      "components": {
+        "copy_to_cpu_ms": {
+          "median_ms": 2.8425670170690864,
+          "mean_ms": 2.94487229839433,
+          "min_ms": 2.808867022395134,
+          "max_ms": 3.3759379875846207,
+          "stdev_ms": 0.18646936139673997,
+          "p90_ms": 3.2819040818139915,
+          "p95_ms": 3.3129919349448755
+        },
+        "cpu_mm_ms": {
+          "median_ms": 950.658959482098,
+          "mean_ms": 950.011498996173,
+          "min_ms": 945.5390989896841,
+          "max_ms": 953.0109869665466,
+          "stdev_ms": 2.325985232373361,
+          "p90_ms": 952.8145663789473,
+          "p95_ms": 952.9383366840193
+        },
+        "cpu_to_cuda_ms": {
+          "median_ms": 0.40603100205771625,
+          "mean_ms": 0.404573991545476,
+          "min_ms": 0.3890810185112059,
+          "max_ms": 0.42001099791377783,
+          "stdev_ms": 0.008516474248221884,
+          "p90_ms": 0.41294219554401934,
+          "p95_ms": 0.41707642667461187
+        },
+        "gpu_mm_ms": {
+          "median_ms": 0.3449709911365062,
+          "mean_ms": 0.34583120432216674,
+          "min_ms": 0.3400599816814065,
+          "max_ms": 0.35515002673491836,
+          "stdev_ms": 0.003985417587172046,
+          "p90_ms": 0.352583039784804,
+          "p95_ms": 0.35349796526134014
+        },
+        "cat_ms": {
+          "median_ms": 0.06299000233411789,
+          "mean_ms": 0.06315729988273233,
+          "min_ms": 0.06168999243527651,
+          "max_ms": 0.0648809946142137,
+          "stdev_ms": 0.0008105347905158738,
+          "p90_ms": 0.06439403514377773,
+          "p95_ms": 0.06461501470766962
+        },
+        "total_ms": {
+          "median_ms": 2859.281277982518,
+          "mean_ms": 2859.3567152536707,
+          "min_ms": 2847.5967720150948,
+          "max_ms": 2868.603542970959,
+          "stdev_ms": 5.89304029216795,
+          "p90_ms": 2866.053516982356,
+          "p95_ms": 2868.124706920935
+        }
+      },
+      "total_tflops": 0.0007510571501084511
+    }
+  ]
+}

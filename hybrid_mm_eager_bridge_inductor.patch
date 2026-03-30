@@ -1,0 +1,637 @@
+diff -ruN '--exclude=.git' '--exclude=__pycache__' /tmp/inductor_orig/inductor-main/_inductor/__init__.py /tmp/inductor_amx/inductor-main/_inductor/__init__.py
+--- /tmp/inductor_orig/inductor-main/_inductor/__init__.py	2026-03-07 14:23:01.000000000 +0000
++++ /tmp/inductor_amx/inductor-main/_inductor/__init__.py	2026-03-27 08:55:02.540724166 +0000
+@@ -24,6 +24,8 @@
+     "list_options",
+     "cudagraph_mark_step_begin",
+     "standalone_compile",
++    "hybrid_mm_eager_bridge_backend",
++    "make_hybrid_mm_eager_bridge_backend",
+ ]
+ 
+ 
+@@ -413,3 +415,8 @@
+     return standalone_compile(
+         gm, example_inputs, dynamic_shapes=dynamic_shapes, options=options
+     )
++
++from .hybrid_mm_eager_bridge import (
++    hybrid_mm_eager_bridge_backend,
++    make_hybrid_mm_eager_bridge_backend,
++)
+diff -ruN '--exclude=.git' '--exclude=__pycache__' /tmp/inductor_orig/inductor-main/_inductor/config.py /tmp/inductor_amx/inductor-main/_inductor/config.py
+--- /tmp/inductor_orig/inductor-main/_inductor/config.py	2026-03-07 14:23:01.000000000 +0000
++++ /tmp/inductor_amx/inductor-main/_inductor/config.py	2026-03-27 08:55:02.539346500 +0000
+@@ -1604,6 +1604,23 @@
+     split_k_threshold: int = 16
+ 
+ 
++# Hybrid MM eager-bridge controls. These are used by the explicit
++# hybrid_mm_eager_bridge backend and do not rewrite the default Inductor path.
++hybrid_mm_axis: Literal["n"] = os.environ.get("TORCHINDUCTOR_HYBRID_MM_AXIS", "n")
++hybrid_mm_cpu_ratio: float = float(os.environ.get("TORCHINDUCTOR_HYBRID_MM_CPU_RATIO", "0.5"))
++hybrid_mm_cpu_n_align: int = int(os.environ.get("TORCHINDUCTOR_HYBRID_MM_CPU_N_ALIGN", "32"))
++hybrid_mm_min_chunk_n: int = int(os.environ.get("TORCHINDUCTOR_HYBRID_MM_MIN_CHUNK_N", "32"))
++hybrid_mm_min_m: int = int(os.environ.get("TORCHINDUCTOR_HYBRID_MM_MIN_M", "1"))
++hybrid_mm_min_n: int = int(os.environ.get("TORCHINDUCTOR_HYBRID_MM_MIN_N", "64"))
++hybrid_mm_min_k: int = int(os.environ.get("TORCHINDUCTOR_HYBRID_MM_MIN_K", "64"))
++
++# When enabled for CPU matmul lowering with cpu_backend="triton_shared", do not
++# construct ATen/CPP GEMM fallbacks. Either generate at least one Triton choice or
++# fail loudly.
++force_triton_shared_mm: bool = (
++    os.environ.get("TORCHINDUCTOR_FORCE_TRITON_SHARED_MM", "0") == "1"
++)
++
+ # Backend to use for CPU codegen either "cpp" or "triton" (experimental) or "halide" (experimental)
+ cpu_backend: Literal["cpp", "triton", "halide", "triton_shared"] = "cpp"
+ 
+diff -ruN '--exclude=.git' '--exclude=__pycache__' /tmp/inductor_orig/inductor-main/_inductor/hybrid_mm_eager_bridge.py /tmp/inductor_amx/inductor-main/_inductor/hybrid_mm_eager_bridge.py
+--- /tmp/inductor_orig/inductor-main/_inductor/hybrid_mm_eager_bridge.py	1970-01-01 00:00:00.000000000 +0000
++++ /tmp/inductor_amx/inductor-main/_inductor/hybrid_mm_eager_bridge.py	2026-03-27 08:57:32.183573583 +0000
+@@ -0,0 +1,238 @@
++from __future__ import annotations
++
++import dataclasses
++import operator
++import math
++from typing import Any, Callable, Optional
++
++import torch
++import torch.fx
++
++from . import config
++from . import compile as inductor_compile
++
++
++_SUPPORTED_MM_TARGETS = {
++    torch.mm,
++    torch.matmul,
++    operator.matmul,
++    torch.ops.aten.mm.default,
++}
++
++
++class UnsupportedHybridMMGraph(RuntimeError):
++    pass
++
++
++@dataclasses.dataclass
++class HybridMMDebug:
++    mode: str
++    cpu_n: Optional[int] = None
++    total_n: Optional[int] = None
++    cpu_graph: Optional[str] = None
++    gpu_graph: Optional[str] = None
++    original_graph: Optional[str] = None
++    cpu_compile_options: Optional[dict[str, Any]] = None
++    gpu_compile_options: Optional[dict[str, Any]] = None
++
++
++@dataclasses.dataclass
++class HybridMMPlan:
++    cpu_n: int
++    total_n: int
++    cpu_graph: torch.fx.GraphModule
++    gpu_graph: torch.fx.GraphModule
++    cpu_compile_options: dict[str, Any]
++    gpu_compile_options: dict[str, Any]
++    cpu_compiled: Callable[..., Any]
++    gpu_compiled: Callable[..., Any]
++
++
++def _extract_graph_io(gm: torch.fx.GraphModule) -> tuple[list[torch.fx.Node], torch.fx.Node]:
++    placeholders = [node for node in gm.graph.nodes if node.op == "placeholder"]
++    outputs = [node for node in gm.graph.nodes if node.op == "output"]
++    if len(outputs) != 1:
++        raise UnsupportedHybridMMGraph("expected exactly one output node")
++    return placeholders, outputs[0]
++
++
++def _extract_mm_node(gm: torch.fx.GraphModule) -> tuple[torch.fx.Node, list[torch.fx.Node]]:
++    placeholders, output = _extract_graph_io(gm)
++    if len(placeholders) != 2:
++        raise UnsupportedHybridMMGraph("expected exactly two tensor placeholders")
++    out = output.args[0]
++    if not isinstance(out, torch.fx.Node):
++        raise UnsupportedHybridMMGraph("expected tensor output node")
++    if out.op != "call_function" or out.target not in _SUPPORTED_MM_TARGETS:
++        raise UnsupportedHybridMMGraph("expected a direct mm output graph")
++    if len(out.args) != 2 or tuple(out.args) != tuple(placeholders):
++        raise UnsupportedHybridMMGraph("expected mm(placeholders[0], placeholders[1])")
++    return out, placeholders
++
++
++def _aligned_cpu_split(n: int) -> int:
++    ratio = config.hybrid_mm_cpu_ratio
++    align = max(int(config.hybrid_mm_cpu_n_align), 1)
++    min_chunk = max(int(config.hybrid_mm_min_chunk_n), 1)
++    if not (0.0 < ratio < 1.0):
++        return 0
++    raw = int(math.floor(n * ratio))
++    if raw <= 0:
++        return 0
++    split_n = (raw // align) * align
++    if split_n < min_chunk or n - split_n < min_chunk:
++        return 0
++    return split_n
++
++
++def _validate_examples(example_inputs: list[Any]) -> tuple[torch.Tensor, torch.Tensor, int, int, int]:
++    if len(example_inputs) != 2:
++        raise UnsupportedHybridMMGraph("expected exactly two example inputs")
++    mat1, mat2 = example_inputs
++    if not isinstance(mat1, torch.Tensor) or not isinstance(mat2, torch.Tensor):
++        raise UnsupportedHybridMMGraph("expected tensor inputs")
++    if mat1.dim() != 2 or mat2.dim() != 2:
++        raise UnsupportedHybridMMGraph("expected rank-2 mm inputs")
++    if mat1.device.type != "cuda" or mat2.device.type != "cuda":
++        raise UnsupportedHybridMMGraph("hybrid backend only supports CUDA inputs")
++    if mat1.dtype != mat2.dtype:
++        raise UnsupportedHybridMMGraph("expected matching dtypes")
++    m, k = int(mat1.shape[0]), int(mat1.shape[1])
++    k_rhs, n = int(mat2.shape[0]), int(mat2.shape[1])
++    if k != k_rhs:
++        raise UnsupportedHybridMMGraph("K dimension mismatch")
++    if config.hybrid_mm_axis != "n":
++        raise UnsupportedHybridMMGraph("only n-axis split is supported")
++    if m < config.hybrid_mm_min_m or n < config.hybrid_mm_min_n or k < config.hybrid_mm_min_k:
++        raise UnsupportedHybridMMGraph("shape below configured hybrid_mm thresholds")
++    split_n = _aligned_cpu_split(n)
++    if split_n <= 0:
++        raise UnsupportedHybridMMGraph("unable to derive an aligned CPU chunk for N split")
++    return mat1, mat2, m, n, split_n
++
++
++def _make_mm_graph_module() -> torch.fx.GraphModule:
++    graph = torch.fx.Graph()
++    lhs = graph.placeholder("lhs")
++    rhs = graph.placeholder("rhs")
++    out = graph.call_function(torch.mm, args=(lhs, rhs))
++    graph.output(out)
++    return torch.fx.GraphModule({}, graph)
++
++
++def _build_plan(gm: torch.fx.GraphModule, example_inputs: list[Any]) -> HybridMMPlan:
++    _extract_mm_node(gm)
++    mat1, mat2, _m, n, split_n = _validate_examples(example_inputs)
++
++    cpu_graph = _make_mm_graph_module()
++    gpu_graph = _make_mm_graph_module()
++
++    cpu_compile_options = {
++        "cpu_backend": "triton_shared",
++        "force_triton_shared_mm": True,
++        "max_autotune": True,
++        "max_autotune_gemm": True,
++        "max_autotune_gemm_backends": "TRITON",
++        "force_disable_caches": True,
++    }
++    gpu_compile_options = {
++        "force_disable_caches": True,
++    }
++
++    cpu_examples = [
++        mat1.detach().to("cpu"),
++        mat2[:, :split_n].detach().to("cpu"),
++    ]
++    gpu_examples = [
++        mat1.detach(),
++        mat2[:, split_n:].detach(),
++    ]
++
++    cpu_compiled = inductor_compile(cpu_graph, cpu_examples, options=cpu_compile_options)
++    gpu_compiled = inductor_compile(gpu_graph, gpu_examples, options=gpu_compile_options)
++
++    return HybridMMPlan(
++        cpu_n=split_n,
++        total_n=n,
++        cpu_graph=cpu_graph,
++        gpu_graph=gpu_graph,
++        cpu_compile_options=cpu_compile_options,
++        gpu_compile_options=gpu_compile_options,
++        cpu_compiled=cpu_compiled,
++        gpu_compiled=gpu_compiled,
++    )
++
++
++def hybrid_mm_eager_bridge_backend(
++    gm: torch.fx.GraphModule,
++    example_inputs: list[Any],
++):
++    """
++    Minimal hybrid backend for mm-only CUDA graphs.
++
++    The backend compiles two separate mm subgraphs:
++      - CPU branch: triton_shared, eager input copy to CPU
++      - GPU branch: regular CUDA inductor
++
++    The bridge steps (CPU input copy, CPU result copy back to CUDA, concat) stay in
++    eager Python. This deliberately avoids putting CPU<->CUDA bridge ops inside a
++    single compiled FX graph, which was the unstable path in prior experiments.
++    Unsupported graphs fall back to standard torch._inductor.compile().
++    """
++    try:
++        plan = _build_plan(gm, example_inputs)
++    except UnsupportedHybridMMGraph:
++        compiled = inductor_compile(gm, example_inputs, options={"force_disable_caches": True})
++        setattr(
++            compiled,
++            "_hybrid_mm_debug",
++            HybridMMDebug(mode="fallback", original_graph=gm.code),
++        )
++        return compiled
++
++    cpu_compiled = plan.cpu_compiled
++    gpu_compiled = plan.gpu_compiled
++
++    debug = HybridMMDebug(
++        mode="hybrid_mm_eager_bridge",
++        cpu_n=plan.cpu_n,
++        total_n=plan.total_n,
++        cpu_graph=plan.cpu_graph.code,
++        gpu_graph=plan.gpu_graph.code,
++        original_graph=gm.code,
++        cpu_compile_options=dict(plan.cpu_compile_options),
++        gpu_compile_options=dict(plan.gpu_compile_options),
++    )
++
++    def compiled(*args):
++        if len(args) != 2:
++            raise RuntimeError("hybrid_mm_eager_bridge backend expects exactly two runtime inputs")
++        mat1, mat2 = args
++        if not isinstance(mat1, torch.Tensor) or not isinstance(mat2, torch.Tensor):
++            raise RuntimeError("hybrid_mm_eager_bridge backend expects tensor inputs")
++        if mat1.device.type != "cuda" or mat2.device.type != "cuda":
++            raise RuntimeError("hybrid_mm_eager_bridge runtime requires CUDA tensors")
++        split_n = plan.cpu_n
++        cpu_lhs = mat1.to("cpu")
++        cpu_rhs = mat2[:, :split_n].contiguous().to("cpu")
++        left_cpu = cpu_compiled(cpu_lhs, cpu_rhs)
++        left_cuda = left_cpu.to(mat1.device)
++        right_cuda = gpu_compiled(mat1, mat2[:, split_n:].contiguous())
++        return torch.cat((left_cuda, right_cuda), dim=1)
++
++    setattr(compiled, "_hybrid_mm_debug", debug)
++    return compiled
++
++
++def make_hybrid_mm_eager_bridge_backend(**overrides: Any) -> Callable[[torch.fx.GraphModule, list[Any]], Callable[..., Any]]:
++    def backend(gm: torch.fx.GraphModule, example_inputs: list[Any]):
++        restore = {name: getattr(config, name) for name in overrides}
++        try:
++            for name, value in overrides.items():
++                setattr(config, name, value)
++            return hybrid_mm_eager_bridge_backend(gm, example_inputs)
++        finally:
++            for name, value in restore.items():
++                setattr(config, name, value)
++
++    return backend
+diff -ruN '--exclude=.git' '--exclude=__pycache__' /tmp/inductor_orig/inductor-main/_inductor/kernel/mm.py /tmp/inductor_amx/inductor-main/_inductor/kernel/mm.py
+--- /tmp/inductor_orig/inductor-main/_inductor/kernel/mm.py	2026-03-07 14:23:01.000000000 +0000
++++ /tmp/inductor_amx/inductor-main/_inductor/kernel/mm.py	2026-03-27 08:57:16.180929908 +0000
+@@ -38,6 +38,7 @@
+     TritonTemplate,
+ )
+ from ..utils import (
++    _use_autotune_backend,
+     _use_cutlass_for_op,
+     get_k_splits,
+     get_tma_workspace_arg,
+@@ -646,6 +647,34 @@
+ aten_bias_addmm = ExternKernelChoice(bias_addmm, None)
+ 
+ 
++def _force_triton_shared_mm(layout) -> bool:
++    return (
++        layout.device.type == "cpu"
++        and inductor_config.cpu_backend == "triton_shared"
++        and inductor_config.force_triton_shared_mm
++    )
++
++
++def _ensure_triton_shared_preconditions(op_name: str, layout) -> None:
++    if not _force_triton_shared_mm(layout):
++        return
++    if not (inductor_config.max_autotune or inductor_config.max_autotune_gemm):
++        raise RuntimeError(
++            f"{op_name}: force_triton_shared_mm requires max_autotune or max_autotune_gemm"
++        )
++    if not _use_autotune_backend("TRITON"):
++        raise RuntimeError(
++            f"{op_name}: force_triton_shared_mm requires TRITON in max_autotune_gemm_backends"
++        )
++
++
++def _ensure_triton_shared_choices(op_name: str, layout, choices) -> None:
++    if _force_triton_shared_mm(layout) and not choices:
++        raise RuntimeError(
++            f"{op_name}: no Triton choices were generated for cpu_backend='triton_shared'"
++        )
++
++
+ def decomposeK(a, b, k_splits):
+     m = a.shape[0]
+     n = b.shape[1]
+@@ -668,6 +697,7 @@
+     m, n, k, layout, mat1, mat2 = mm_args(mat1, mat2, layout=layout)
+     device_type = ir.get_device_type(mat1)
+     name = "mm"
++    _ensure_triton_shared_preconditions(name, layout)
+ 
+     # below is for getting an overview logging info of inductor mms
+     counters["aten_mm_info"][f"aten.mm_{m}_{n}_{k}"] += 1
+@@ -689,7 +719,9 @@
+ 
+     # options to tune from
+     choices = (
+-        [aten_mm.bind((mat1, mat2), aten_layout)] if use_aten_gemm_kernels() else []
++        [aten_mm.bind((mat1, mat2), aten_layout)]
++        if use_aten_gemm_kernels() and not _force_triton_shared_mm(layout)
++        else []
+     )
+     static_shape, is_nonzero = _is_static_problem(layout)
+ 
+@@ -787,7 +819,7 @@
+     if is_nonzero and use_ck_tile_gemm_template(layout, m, n, k):
+         CKTileGemmTemplate.add_choices(choices, layout, [mat1, mat2])
+ 
+-    if use_cpp_gemm_template(layout, mat1, mat2):
++    if use_cpp_gemm_template(layout, mat1, mat2) and not _force_triton_shared_mm(layout):
+         CppGemmTemplate.add_choices(
+             choices,
+             layout,
+@@ -841,9 +873,11 @@
+             else:
+                 choices = choices[:num_choices_before_extra_configs]
+ 
+-    for k in inductor_config.external_matmul:
+-        choices.append(lazy_register_extern_choice(k).bind((mat1, mat2), layout))
++    if not _force_triton_shared_mm(layout):
++        for k in inductor_config.external_matmul:
++            choices.append(lazy_register_extern_choice(k).bind((mat1, mat2), layout))
+ 
++    _ensure_triton_shared_choices(name, layout, choices)
+     return autotune_select_algorithm(name, choices, [mat1, mat2], layout)
+ 
+ 
+@@ -899,6 +933,7 @@
+ def tuned_addmm(inp, mat1, mat2, *, alpha=1, beta=1, layout=None):
+     device_type = ir.get_device_type(mat1)
+     m, n, k, layout, mat1, mat2, inp_expanded = mm_args(mat1, mat2, inp, layout=layout)
++    _ensure_triton_shared_preconditions("addmm", layout)
+     static_shape, is_nonzero = _is_static_problem(layout)
+ 
+     # below is for getting an overview logging info of inductor mms
+@@ -933,9 +968,10 @@
+                     beta=beta,
+                 )
+             ]
+-            if use_aten_gemm_kernels()
++            if use_aten_gemm_kernels() and not _force_triton_shared_mm(layout)
+             else []
+         )
++        _ensure_triton_shared_choices("addmm", layout, choices)
+         return autotune_select_algorithm("addmm", choices, [inp, mat1, mat2], layout)
+ 
+     choices = (
+@@ -947,12 +983,13 @@
+                 beta=beta,
+             )
+         ]
+-        if use_aten_gemm_kernels()
++        if use_aten_gemm_kernels() and not _force_triton_shared_mm(layout)
+         else []
+     )
+ 
+     if (
+         use_aten_gemm_kernels()
++        and not _force_triton_shared_mm(layout)
+         and inp_expanded.get_stride()[0] == 0
+         and inp_expanded.get_device().type == "cuda"
+         and inductor_config.triton.autotune_cublasLt
+@@ -1033,7 +1070,7 @@
+             input_reorder=[2, 0, 1],
+         )
+ 
+-    if use_cpp_gemm_template(layout, mat1, mat2):
++    if use_cpp_gemm_template(layout, mat1, mat2) and not _force_triton_shared_mm(layout):
+         CppGemmTemplate.add_choices(
+             choices,
+             layout,
+@@ -1043,6 +1080,7 @@
+             has_bias=True,
+         )
+ 
++    _ensure_triton_shared_choices("addmm", layout, choices)
+     return autotune_select_algorithm(
+         "addmm", choices, [inp_expanded, mat1, mat2], layout
+     )
+diff -ruN '--exclude=.git' '--exclude=__pycache__' /tmp/inductor_orig/inductor-main/run_hybrid_mm_eager_bridge_tests.sh /tmp/inductor_amx/inductor-main/run_hybrid_mm_eager_bridge_tests.sh
+--- /tmp/inductor_orig/inductor-main/run_hybrid_mm_eager_bridge_tests.sh	1970-01-01 00:00:00.000000000 +0000
++++ /tmp/inductor_amx/inductor-main/run_hybrid_mm_eager_bridge_tests.sh	2026-03-27 08:55:02.541050114 +0000
+@@ -0,0 +1,15 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++export TORCHINDUCTOR_HYBRID_MM_AXIS="${TORCHINDUCTOR_HYBRID_MM_AXIS:-n}"
++export TORCHINDUCTOR_HYBRID_MM_CPU_RATIO="${TORCHINDUCTOR_HYBRID_MM_CPU_RATIO:-0.5}"
++export TORCHINDUCTOR_HYBRID_MM_CPU_N_ALIGN="${TORCHINDUCTOR_HYBRID_MM_CPU_N_ALIGN:-32}"
++export TORCHINDUCTOR_HYBRID_MM_MIN_CHUNK_N="${TORCHINDUCTOR_HYBRID_MM_MIN_CHUNK_N:-32}"
++export TORCHINDUCTOR_HYBRID_MM_MIN_M="${TORCHINDUCTOR_HYBRID_MM_MIN_M:-1}"
++export TORCHINDUCTOR_HYBRID_MM_MIN_N="${TORCHINDUCTOR_HYBRID_MM_MIN_N:-64}"
++export TORCHINDUCTOR_HYBRID_MM_MIN_K="${TORCHINDUCTOR_HYBRID_MM_MIN_K:-64}"
++export TORCHINDUCTOR_FORCE_TRITON_SHARED_MM="${TORCHINDUCTOR_FORCE_TRITON_SHARED_MM:-1}"
++export TRITON_SHARED_ENABLE_AMX="${TRITON_SHARED_ENABLE_AMX:-0}"
++
++python3 test_hybrid_mm_eager_bridge_fallback.py
++python3 test_hybrid_mm_eager_bridge_backend.py
+diff -ruN '--exclude=.git' '--exclude=__pycache__' /tmp/inductor_orig/inductor-main/test_hybrid_mm_eager_bridge_backend.py /tmp/inductor_amx/inductor-main/test_hybrid_mm_eager_bridge_backend.py
+--- /tmp/inductor_orig/inductor-main/test_hybrid_mm_eager_bridge_backend.py	1970-01-01 00:00:00.000000000 +0000
++++ /tmp/inductor_amx/inductor-main/test_hybrid_mm_eager_bridge_backend.py	2026-03-27 08:56:22.795407866 +0000
+@@ -0,0 +1,143 @@
++#!/usr/bin/env python3
++import json
++from contextlib import contextmanager
++from typing import Any
++
++import torch
++
++from _inductor.hybrid_mm_eager_bridge import hybrid_mm_eager_bridge_backend
++
++
++def _json_default(obj: Any):
++    if isinstance(obj, torch.dtype):
++        return str(obj)
++    if isinstance(obj, torch.device):
++        return str(obj)
++    return repr(obj)
++
++
++def has_triton_shared_backend() -> bool:
++    try:
++        import triton
++    except Exception:
++        return False
++    return "triton_shared" in getattr(triton.backends, "backends", {})
++
++
++class TritonCompileObserver:
++    def __init__(self):
++        self.cpu_target_seen = False
++        self.cuda_target_seen = False
++        self.calls = []
++
++    def record(self, target):
++        target_repr = repr(target)
++        self.calls.append(target_repr)
++        if "backend='cpu'" in target_repr:
++            self.cpu_target_seen = True
++        if "backend='cuda'" in target_repr:
++            self.cuda_target_seen = True
++
++
++@contextmanager
++def observe_triton_compile():
++    import triton
++
++    observer = TritonCompileObserver()
++    original = triton.compile
++
++    def wrapped(*args, **kwargs):
++        target = kwargs.get("target")
++        if target is None:
++            for arg in args:
++                rep = repr(arg)
++                if "backend='cpu'" in rep or "backend='cuda'" in rep:
++                    target = arg
++                    break
++        observer.record(target)
++        return original(*args, **kwargs)
++
++    triton.compile = wrapped
++    try:
++        yield observer
++    finally:
++        triton.compile = original
++
++
++def make_mm_graph_module() -> torch.fx.GraphModule:
++    graph = torch.fx.Graph()
++    lhs = graph.placeholder("lhs")
++    rhs = graph.placeholder("rhs")
++    out = graph.call_function(torch.mm, args=(lhs, rhs))
++    graph.output(out)
++    return torch.fx.GraphModule({}, graph)
++
++
++def main() -> int:
++    diagnostics = {
++        "torch_version": torch.__version__,
++        "cuda_available": torch.cuda.is_available(),
++        "cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
++        "has_triton_shared_backend": has_triton_shared_backend(),
++        "TRITON_SHARED_ENABLE_AMX": __import__("os").environ.get("TRITON_SHARED_ENABLE_AMX"),
++        "TRITON_SHARED_OPT_PATH": __import__("os").environ.get("TRITON_SHARED_OPT_PATH"),
++    }
++    print(json.dumps({"backend_diagnostics": diagnostics}, indent=2, default=_json_default))
++
++    if not torch.cuda.is_available():
++        print(json.dumps([{"test": "hybrid_mm_eager_bridge_backend", "status": "SKIP", "reason": "CUDA is not available"}], indent=2))
++        return 0
++    if not has_triton_shared_backend():
++        print(json.dumps([{"test": "hybrid_mm_eager_bridge_backend", "status": "SKIP", "reason": "triton_shared backend not registered"}], indent=2))
++        return 0
++
++    torch.manual_seed(0)
++    a = torch.randn(128, 256, device="cuda", dtype=torch.float32)
++    b = torch.randn(256, 256, device="cuda", dtype=torch.float32)
++    gm = make_mm_graph_module()
++
++    with observe_triton_compile() as observer:
++        compiled = hybrid_mm_eager_bridge_backend(gm, [a, b])
++        out = compiled(a, b)
++
++    ref = torch.mm(a, b)
++    max_abs = float((out - ref).abs().max().item())
++    debug = getattr(compiled, "_hybrid_mm_debug")
++    ok = (
++        debug.mode == "hybrid_mm_eager_bridge"
++        and observer.cpu_target_seen
++        and observer.cuda_target_seen
++        and out.device.type == "cuda"
++        and out.shape == ref.shape
++        and max_abs < 1e-3
++        and "torch.mm" in (debug.cpu_graph or "")
++        and "torch.mm" in (debug.gpu_graph or "")
++        and "to(" not in (debug.cpu_graph or "")
++        and "to(" not in (debug.gpu_graph or "")
++    )
++
++    results = [{
++        "test": "hybrid_mm_eager_bridge_backend",
++        "status": "PASS" if ok else "FAIL",
++        "cpu_target_seen": observer.cpu_target_seen,
++        "cuda_target_seen": observer.cuda_target_seen,
++        "compile_calls": observer.calls,
++        "debug": {
++            "mode": debug.mode,
++            "cpu_n": debug.cpu_n,
++            "total_n": debug.total_n,
++            "cpu_graph": debug.cpu_graph,
++            "gpu_graph": debug.gpu_graph,
++            "cpu_compile_options": debug.cpu_compile_options,
++            "gpu_compile_options": debug.gpu_compile_options,
++        },
++        "output_device": str(out.device),
++        "output_shape": list(out.shape),
++        "max_abs": max_abs,
++    }]
++    print(json.dumps(results, indent=2, default=_json_default))
++    return 0 if ok else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff -ruN '--exclude=.git' '--exclude=__pycache__' /tmp/inductor_orig/inductor-main/test_hybrid_mm_eager_bridge_fallback.py /tmp/inductor_amx/inductor-main/test_hybrid_mm_eager_bridge_fallback.py
+--- /tmp/inductor_orig/inductor-main/test_hybrid_mm_eager_bridge_fallback.py	1970-01-01 00:00:00.000000000 +0000
++++ /tmp/inductor_amx/inductor-main/test_hybrid_mm_eager_bridge_fallback.py	2026-03-27 08:55:02.540967009 +0000
+@@ -0,0 +1,37 @@
++#!/usr/bin/env python3
++import json
++
++import torch
++
++from _inductor.hybrid_mm_eager_bridge import hybrid_mm_eager_bridge_backend
++
++
++def make_non_mm_graph_module() -> torch.fx.GraphModule:
++    graph = torch.fx.Graph()
++    lhs = graph.placeholder("lhs")
++    rhs = graph.placeholder("rhs")
++    out = graph.call_function(torch.add, args=(lhs, rhs))
++    graph.output(out)
++    return torch.fx.GraphModule({}, graph)
++
++
++def main() -> int:
++    x = torch.randn(8, 8)
++    y = torch.randn(8, 8)
++    gm = make_non_mm_graph_module()
++    compiled = hybrid_mm_eager_bridge_backend(gm, [x, y])
++    out = compiled(x, y)
++    ref = x + y
++    debug = getattr(compiled, "_hybrid_mm_debug")
++    ok = debug.mode == "fallback" and torch.allclose(out, ref)
++    print(json.dumps([{
++        "test": "hybrid_mm_eager_bridge_fallback",
++        "status": "PASS" if ok else "FAIL",
++        "mode": debug.mode,
++        "max_abs": float((out - ref).abs().max().item()),
++    }], indent=2))
++    return 0 if ok else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

@@ -1,0 +1,215 @@
+--- a/_inductor/hybrid_mm_eager_bridge.py
++++ b/_inductor/hybrid_mm_eager_bridge.py
+@@ -9,7 +9,6 @@
+ import torch.fx
+ 
+ from . import config
+-from . import compile as inductor_compile
+ 
+ 
+ _SUPPORTED_MM_TARGETS = {
+@@ -48,25 +47,35 @@
+     gpu_compiled: Callable[..., Any]
+ 
+ 
++def _inductor_compile(gm: torch.fx.GraphModule, example_inputs: list[Any], *, options: dict[str, Any]):
++    import torch._inductor as torch_inductor
++
++    if hasattr(torch_inductor, 'compile'):
++        return torch_inductor.compile(gm, example_inputs, options=options)
++    if hasattr(torch_inductor, 'compile_fx'):
++        return torch_inductor.compile_fx(gm, example_inputs, config_patches=options)
++    raise RuntimeError('torch._inductor.compile/compile_fx not found')
++
++
+ def _extract_graph_io(gm: torch.fx.GraphModule) -> tuple[list[torch.fx.Node], torch.fx.Node]:
+-    placeholders = [node for node in gm.graph.nodes if node.op == "placeholder"]
+-    outputs = [node for node in gm.graph.nodes if node.op == "output"]
++    placeholders = [node for node in gm.graph.nodes if node.op == 'placeholder']
++    outputs = [node for node in gm.graph.nodes if node.op == 'output']
+     if len(outputs) != 1:
+-        raise UnsupportedHybridMMGraph("expected exactly one output node")
++        raise UnsupportedHybridMMGraph('expected exactly one output node')
+     return placeholders, outputs[0]
+ 
+ 
+ def _extract_mm_node(gm: torch.fx.GraphModule) -> tuple[torch.fx.Node, list[torch.fx.Node]]:
+     placeholders, output = _extract_graph_io(gm)
+     if len(placeholders) != 2:
+-        raise UnsupportedHybridMMGraph("expected exactly two tensor placeholders")
++        raise UnsupportedHybridMMGraph('expected exactly two tensor placeholders')
+     out = output.args[0]
+     if not isinstance(out, torch.fx.Node):
+-        raise UnsupportedHybridMMGraph("expected tensor output node")
+-    if out.op != "call_function" or out.target not in _SUPPORTED_MM_TARGETS:
+-        raise UnsupportedHybridMMGraph("expected a direct mm output graph")
++        raise UnsupportedHybridMMGraph('expected tensor output node')
++    if out.op != 'call_function' or out.target not in _SUPPORTED_MM_TARGETS:
++        raise UnsupportedHybridMMGraph('expected a direct mm output graph')
+     if len(out.args) != 2 or tuple(out.args) != tuple(placeholders):
+-        raise UnsupportedHybridMMGraph("expected mm(placeholders[0], placeholders[1])")
++        raise UnsupportedHybridMMGraph('expected mm(placeholders[0], placeholders[1])')
+     return out, placeholders
+ 
+ 
+@@ -87,34 +96,34 @@
+ 
+ def _validate_examples(example_inputs: list[Any]) -> tuple[torch.Tensor, torch.Tensor, int, int, int]:
+     if len(example_inputs) != 2:
+-        raise UnsupportedHybridMMGraph("expected exactly two example inputs")
++        raise UnsupportedHybridMMGraph('expected exactly two example inputs')
+     mat1, mat2 = example_inputs
+     if not isinstance(mat1, torch.Tensor) or not isinstance(mat2, torch.Tensor):
+-        raise UnsupportedHybridMMGraph("expected tensor inputs")
++        raise UnsupportedHybridMMGraph('expected tensor inputs')
+     if mat1.dim() != 2 or mat2.dim() != 2:
+-        raise UnsupportedHybridMMGraph("expected rank-2 mm inputs")
+-    if mat1.device.type != "cuda" or mat2.device.type != "cuda":
+-        raise UnsupportedHybridMMGraph("hybrid backend only supports CUDA inputs")
++        raise UnsupportedHybridMMGraph('expected rank-2 mm inputs')
++    if mat1.device.type != 'cuda' or mat2.device.type != 'cuda':
++        raise UnsupportedHybridMMGraph('hybrid backend only supports CUDA inputs')
+     if mat1.dtype != mat2.dtype:
+-        raise UnsupportedHybridMMGraph("expected matching dtypes")
++        raise UnsupportedHybridMMGraph('expected matching dtypes')
+     m, k = int(mat1.shape[0]), int(mat1.shape[1])
+     k_rhs, n = int(mat2.shape[0]), int(mat2.shape[1])
+     if k != k_rhs:
+-        raise UnsupportedHybridMMGraph("K dimension mismatch")
+-    if config.hybrid_mm_axis != "n":
+-        raise UnsupportedHybridMMGraph("only n-axis split is supported")
++        raise UnsupportedHybridMMGraph('K dimension mismatch')
++    if config.hybrid_mm_axis != 'n':
++        raise UnsupportedHybridMMGraph('only n-axis split is supported')
+     if m < config.hybrid_mm_min_m or n < config.hybrid_mm_min_n or k < config.hybrid_mm_min_k:
+-        raise UnsupportedHybridMMGraph("shape below configured hybrid_mm thresholds")
++        raise UnsupportedHybridMMGraph('shape below configured hybrid_mm thresholds')
+     split_n = _aligned_cpu_split(n)
+     if split_n <= 0:
+-        raise UnsupportedHybridMMGraph("unable to derive an aligned CPU chunk for N split")
++        raise UnsupportedHybridMMGraph('unable to derive an aligned CPU chunk for N split')
+     return mat1, mat2, m, n, split_n
+ 
+ 
+ def _make_mm_graph_module() -> torch.fx.GraphModule:
+     graph = torch.fx.Graph()
+-    lhs = graph.placeholder("lhs")
+-    rhs = graph.placeholder("rhs")
++    lhs = graph.placeholder('lhs')
++    rhs = graph.placeholder('rhs')
+     out = graph.call_function(torch.mm, args=(lhs, rhs))
+     graph.output(out)
+     return torch.fx.GraphModule({}, graph)
+@@ -128,28 +137,22 @@
+     gpu_graph = _make_mm_graph_module()
+ 
+     cpu_compile_options = {
+-        "cpu_backend": "triton_shared",
+-        "force_triton_shared_mm": True,
+-        "max_autotune": True,
+-        "max_autotune_gemm": True,
+-        "max_autotune_gemm_backends": "TRITON",
+-        "force_disable_caches": True,
++        'cpu_backend': 'triton_shared',
++        'force_triton_shared_mm': True,
++        'max_autotune': True,
++        'max_autotune_gemm': True,
++        'max_autotune_gemm_backends': 'TRITON',
++        'force_disable_caches': True,
+     }
+     gpu_compile_options = {
+-        "force_disable_caches": True,
++        'force_disable_caches': True,
+     }
+ 
+-    cpu_examples = [
+-        mat1.detach().to("cpu"),
+-        mat2[:, :split_n].detach().to("cpu"),
+-    ]
+-    gpu_examples = [
+-        mat1.detach(),
+-        mat2[:, split_n:].detach(),
+-    ]
+-
+-    cpu_compiled = inductor_compile(cpu_graph, cpu_examples, options=cpu_compile_options)
+-    gpu_compiled = inductor_compile(gpu_graph, gpu_examples, options=gpu_compile_options)
++    cpu_examples = [mat1.detach().to('cpu'), mat2[:, :split_n].detach().to('cpu')]
++    gpu_examples = [mat1.detach(), mat2[:, split_n:].detach()]
++
++    cpu_compiled = _inductor_compile(cpu_graph, cpu_examples, options=cpu_compile_options)
++    gpu_compiled = _inductor_compile(gpu_graph, gpu_examples, options=gpu_compile_options)
+ 
+     return HybridMMPlan(
+         cpu_n=split_n,
+@@ -163,38 +166,19 @@
+     )
+ 
+ 
+-def hybrid_mm_eager_bridge_backend(
+-    gm: torch.fx.GraphModule,
+-    example_inputs: list[Any],
+-):
+-    """
+-    Minimal hybrid backend for mm-only CUDA graphs.
+-
+-    The backend compiles two separate mm subgraphs:
+-      - CPU branch: triton_shared, eager input copy to CPU
+-      - GPU branch: regular CUDA inductor
+-
+-    The bridge steps (CPU input copy, CPU result copy back to CUDA, concat) stay in
+-    eager Python. This deliberately avoids putting CPU<->CUDA bridge ops inside a
+-    single compiled FX graph, which was the unstable path in prior experiments.
+-    Unsupported graphs fall back to standard torch._inductor.compile().
+-    """
++def hybrid_mm_eager_bridge_backend(gm: torch.fx.GraphModule, example_inputs: list[Any]):
+     try:
+         plan = _build_plan(gm, example_inputs)
+     except UnsupportedHybridMMGraph:
+-        compiled = inductor_compile(gm, example_inputs, options={"force_disable_caches": True})
+-        setattr(
+-            compiled,
+-            "_hybrid_mm_debug",
+-            HybridMMDebug(mode="fallback", original_graph=gm.code),
+-        )
++        compiled = _inductor_compile(gm, example_inputs, options={'force_disable_caches': True})
++        setattr(compiled, '_hybrid_mm_debug', HybridMMDebug(mode='fallback', original_graph=gm.code))
+         return compiled
+ 
+     cpu_compiled = plan.cpu_compiled
+     gpu_compiled = plan.gpu_compiled
+ 
+     debug = HybridMMDebug(
+-        mode="hybrid_mm_eager_bridge",
++        mode='hybrid_mm_eager_bridge',
+         cpu_n=plan.cpu_n,
+         total_n=plan.total_n,
+         cpu_graph=plan.cpu_graph.code,
+@@ -206,21 +190,21 @@
+ 
+     def compiled(*args):
+         if len(args) != 2:
+-            raise RuntimeError("hybrid_mm_eager_bridge backend expects exactly two runtime inputs")
++            raise RuntimeError('hybrid_mm_eager_bridge backend expects exactly two runtime inputs')
+         mat1, mat2 = args
+         if not isinstance(mat1, torch.Tensor) or not isinstance(mat2, torch.Tensor):
+-            raise RuntimeError("hybrid_mm_eager_bridge backend expects tensor inputs")
+-        if mat1.device.type != "cuda" or mat2.device.type != "cuda":
+-            raise RuntimeError("hybrid_mm_eager_bridge runtime requires CUDA tensors")
++            raise RuntimeError('hybrid_mm_eager_bridge backend expects tensor inputs')
++        if mat1.device.type != 'cuda' or mat2.device.type != 'cuda':
++            raise RuntimeError('hybrid_mm_eager_bridge runtime requires CUDA tensors')
+         split_n = plan.cpu_n
+-        cpu_lhs = mat1.to("cpu")
+-        cpu_rhs = mat2[:, :split_n].contiguous().to("cpu")
++        cpu_lhs = mat1.to('cpu')
++        cpu_rhs = mat2[:, :split_n].contiguous().to('cpu')
+         left_cpu = cpu_compiled(cpu_lhs, cpu_rhs)
+         left_cuda = left_cpu.to(mat1.device)
+         right_cuda = gpu_compiled(mat1, mat2[:, split_n:].contiguous())
+         return torch.cat((left_cuda, right_cuda), dim=1)
+ 
+-    setattr(compiled, "_hybrid_mm_debug", debug)
++    setattr(compiled, '_hybrid_mm_debug', debug)
+     return compiled
+ 
+ 

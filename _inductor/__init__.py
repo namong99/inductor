@@ -24,6 +24,8 @@ __all__ = [
     "list_options",
     "cudagraph_mark_step_begin",
     "standalone_compile",
+    "hybrid_mm_eager_bridge_backend",
+    "make_hybrid_mm_eager_bridge_backend",
 ]
 
 
@@ -413,3 +415,8 @@ def standalone_compile(
     return standalone_compile(
         gm, example_inputs, dynamic_shapes=dynamic_shapes, options=options
     )
+
+from .hybrid_mm_eager_bridge import (
+    hybrid_mm_eager_bridge_backend,
+    make_hybrid_mm_eager_bridge_backend,
+)
